@@ -1,0 +1,9 @@
+string image_source
+geometry_msgs/Point center
+float64 distance
+duration max_duration
+---
+# did robot walkted to the object?
+bool success
+---
+string status

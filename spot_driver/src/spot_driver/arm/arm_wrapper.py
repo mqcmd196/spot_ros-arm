@@ -1,3 +1,4 @@
+from google.protobuf import wrappers_pb2
 from bosdyn.api import arm_command_pb2, estop_pb2, geometry_pb2, robot_command_pb2, synchronized_command_pb2, image_pb2
 from bosdyn.api.spot import robot_command_pb2 as spot_command_pb2
 from bosdyn.client.robot import RobotCommandClient
@@ -6,7 +7,7 @@ import rospy
 import actionlib
 
 from std_srvs.srv import Trigger, TriggerResponse
-from spot_msgs.msg import OpenDoorAction, PickObjectInImageAction, PickObjectInImageFeedback, PickObjectInImageResult, PickObjectInImageGoal
+from spot_msgs.msg import OpenDoorAction, PickObjectInImageAction, PickObjectInImageFeedback, PickObjectInImageResult, PickObjectInImageGoal, WalkToObjectInImageAction, WalkToObjectInImageFeedback, WalkToObjectInImageResult, WalkToObjectInImageGoal
 from spot_msgs.srv import OpenDoor, SetArmImpedanceParams, SetArmImpedanceParamsResponse
 from vision_msgs.msg import Detection2D
 from spot_driver.arm.arm_utilities.object_grabber import object_grabber_main, add_grasp_constraint
@@ -95,8 +96,14 @@ class ArmWrapper:
         self.pick_object_in_image_server = SimpleActionServer(
             "pick_object_in_image",
             PickObjectInImageAction,
-            execute_cb=self.handle_pick_object_in_image)
+            execute_cb=self.handle_action_object_in_image)
         self.pick_object_in_image_server.start()
+
+        self.walk_to_object_in_image_server = SimpleActionServer(
+            "walk_to_object_in_image",
+            WalkToObjectInImageAction,
+            execute_cb=self.handle_action_object_in_image)
+        self.walk_to_object_in_image_server.start()
 
         self._init_bosdyn_clients()
         self._init_actionservers()
@@ -261,7 +268,7 @@ class ArmWrapper:
 
 
     # mostry copied from spot_driver/src/spot_driver/arm/arm_utilities/object_grabber.py
-    def handle_pick_object_in_image(self, goal):
+    def handle_action_object_in_image(self, goal):
         # image source
         images = list(filter(lambda img: re.search("^"+goal.image_source+".*", img.source.name),
                              list(self._spot_wrapper.front_images) +
@@ -275,41 +282,66 @@ class ArmWrapper:
             rospy.logwarn("Found multiple candidates {}".format(list(map(lambda img: img.source.name, images))))
 
         image = images[0]
+        rospy.loginfo("Using image_source {}".format(image.source.name))
 
         # center
         pick_vec = geometry_pb2.Vec2(x=goal.center.x, y=goal.center.y)
 
-        # options
-        options = {
-            "force_top_down_grasp": goal.grasp_constraint == PickObjectInImageGoal.FORCE_TOP_DOWN_GRASP,
-            "force_horizontal_grasp": goal.grasp_constraint == PickObjectInImageGoal.FORCE_HORIZONTAL_GRASP,
-            "force_45_angle_grasp": goal.grasp_constraint == PickObjectInImageGoal.FORCE_45_ANGLE_GRASP,
-            "force_squeeze_grasp": goal.grasp_constraint == PickObjectInImageGoal.FORCE_SQUEEZE_GRASP,
-        }
-
         # duration
         max_duration = goal.max_duration.to_sec()
 
-        # Build the proto
-        grasp = manipulation_api_pb2.PickObjectInImage(
-            pixel_xy=pick_vec,
-            transforms_snapshot_for_camera=image.shot.transforms_snapshot,
-            frame_name_image_sensor=image.shot.frame_name_image_sensor,
-            camera_model=image.source.pinhole)
+        if type(goal) == PickObjectInImageGoal:
+            # options
+            options = {
+                "force_top_down_grasp": goal.grasp_constraint == PickObjectInImageGoal.FORCE_TOP_DOWN_GRASP,
+                "force_horizontal_grasp": goal.grasp_constraint == PickObjectInImageGoal.FORCE_HORIZONTAL_GRASP,
+                "force_45_angle_grasp": goal.grasp_constraint == PickObjectInImageGoal.FORCE_45_ANGLE_GRASP,
+                "force_squeeze_grasp": goal.grasp_constraint == PickObjectInImageGoal.FORCE_SQUEEZE_GRASP,
+            }
 
-        add_grasp_constraint(options, grasp, self._spot_wrapper._robot_state_client)
+            # Build the proto
+            grasp = manipulation_api_pb2.PickObjectInImage(
+                pixel_xy=pick_vec,
+                transforms_snapshot_for_camera=image.shot.transforms_snapshot,
+                frame_name_image_sensor=image.shot.frame_name_image_sensor,
+                camera_model=image.source.pinhole)
 
-        # Ask the robot to pick up the object
-        grasp_request = manipulation_api_pb2.ManipulationApiRequest(
-            pick_object_in_image=grasp
-        )
+            add_grasp_constraint(options, grasp, self._spot_wrapper._robot_state_client)
+
+            # Ask the robot to pick up the object
+            request = manipulation_api_pb2.ManipulationApiRequest(
+                pick_object_in_image=grasp
+            )
+            ac_server = self.pick_object_in_image_server
+            AcServerResult = PickObjectInImageResult
+
+        elif type(goal) == WalkToObjectInImageGoal:
+            # options
+            offset_distance = wrappers_pb2.FloatValue(value=goal.distance)
+
+            # duration
+            max_duration = goal.max_duration.to_sec()
+
+            # Build the proto
+            walk_to = manipulation_api_pb2.WalkToObjectInImage(
+                pixel_xy=pick_vec,
+                transforms_snapshot_for_camera=image.shot.transforms_snapshot,
+                frame_name_image_sensor=image.shot.frame_name_image_sensor,
+                camera_model=image.source.pinhole, offset_distance=offset_distance)
+
+            # Ask the robot to pick up the object
+            request = manipulation_api_pb2.ManipulationApiRequest(
+                walk_to_object_in_image=walk_to)
+
+            ac_server = self.walk_to_object_in_image_server
+            AcServerResult = WalkToObjectInImageResult
+        else:
+            rospy.logerr("Unknown goal message type {}".format(type(goal)))
+            return
 
         # Send the request
-        manipulation_api_client = self._robot.ensure_client(
-            ManipulationApiClient.default_service_name
-        )
-        cmd_response = manipulation_api_client.manipulation_api_command(
-            manipulation_api_request=grasp_request
+        cmd_response = self._manip_client.manipulation_api_command(
+            manipulation_api_request=request
         )
 
         # Send feedback to client
@@ -323,7 +355,7 @@ class ArmWrapper:
             )
 
             # Send the request
-            response = manipulation_api_client.manipulation_api_feedback_command(
+            response = self._manip_client.manipulation_api_feedback_command(
                 manipulation_api_feedback_request=feedback_request
             )
 
@@ -338,24 +370,37 @@ class ArmWrapper:
             )
 
             # Process preempt
-            if self.pick_object_in_image_server.is_preempt_requested():
-                return self.pick_object_in_image_server.set_preempted(PickObjectInImageResult(success=False))
+            if ac_server.is_preempt_requested():
+                return ac_server.set_preempted(AcServerResult(success=False))
 
             # Publish feedback
             feedback.status = manipulation_api_pb2.ManipulationFeedbackState.Name(response.current_state)
-            self.pick_object_in_image_server.publish_feedback(feedback)
+            ac_server.publish_feedback(feedback)
 
-            if ( response.current_state in [manipulation_api_pb2.MANIP_STATE_GRASP_SUCCEEDED,
-                                            manipulation_api_pb2.MANIP_STATE_GRASP_FAILED] ):
-                break;
+            if type(goal) == PickObjectInImageGoal:
+                if ( response.current_state in [manipulation_api_pb2.MANIP_STATE_GRASP_SUCCEEDED,
+                                                manipulation_api_pb2.MANIP_STATE_GRASP_FAILED] ):
+                    break;
+            elif type(goal) == WalkToObjectInImageGoal:
+                if ( response.current_state in [manipulation_api_pb2.MANIP_STATE_DONE] ):
+                    break;
 
         time.sleep(0.25) # make sure robot grasp target
-        is_gripper_holding_item = self._spot_wrapper.robot_state.manipulator_state.is_gripper_holding_item
-        if response.current_state == manipulation_api_pb2.MANIP_STATE_GRASP_SUCCEEDED and \
-           is_gripper_holding_item == True:
-            return self.pick_object_in_image_server.set_succeeded(PickObjectInImageResult(success=True))
-        else:
-            rospy.logerr("Grasping failed Status: {}, IsGripperHoldingItem: {}".format(
-                manipulation_api_pb2.ManipulationFeedbackState.Name(response.current_state),
-                is_gripper_holding_item))
-            return self.pick_object_in_image_server.set_aborted(PickObjectInImageResult(success=False))
+        if type(goal) == PickObjectInImageGoal:
+            is_gripper_holding_item = self._spot_wrapper.robot_state.manipulator_state.is_gripper_holding_item
+            if response.current_state == manipulation_api_pb2.MANIP_STATE_GRASP_SUCCEEDED and \
+               is_gripper_holding_item == True:
+                return self.pick_object_in_image_server.set_succeeded(AcServerResult(success=True))
+            else:
+                rospy.logerr("Grasping failed Status: {}, IsGripperHoldingItem: {}".format(
+                    manipulation_api_pb2.ManipulationFeedbackState.Name(response.current_state),
+                    is_gripper_holding_item))
+                return self.pick_object_in_image_server.set_aborted(AcServerResult(success=False))
+
+        elif type(goal) == WalkToObjectInImageGoal:
+            if response.current_state == manipulation_api_pb2.MANIP_STATE_DONE:
+                return self.walk_to_object_in_image_server.set_succeeded(AcServerResult(success=True))
+            else:
+                rospy.logerr("Walking to failed Status: {}".format(
+                    manipulation_api_pb2.ManipulationFeedbackState.Name(response.current_state)))
+                return self.walk_to_object_in_image_server.set_aborted(AcServerResult(success=False))
