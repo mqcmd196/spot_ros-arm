@@ -8,6 +8,7 @@ from sensor_msgs.msg import Image, CameraInfo
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import TwistWithCovarianceStamped, Twist, Pose
 from nav_msgs.msg import Odometry
+from jsk_recognition_msgs.msg import BoundingBox, BoundingBoxArray
 
 from bosdyn.api.spot import robot_command_pb2 as spot_command_pb2
 from bosdyn.api import geometry_pb2, trajectory_pb2
@@ -58,6 +59,7 @@ class SpotROS():
         self.callbacks["side_image"] = self.SideImageCB
         self.callbacks["rear_image"] = self.RearImageCB
         self.callbacks["gripper_image"] = self.GripperImageCB
+        self.callbacks["world_object"] = self.WorldObjectCB
 
     def RobotStateCB(self, results):
         """Callback for when the Spot Wrapper gets new robot state data.
@@ -263,6 +265,16 @@ class SpotROS():
                 t_image_pub.publish(image_msg0)
                 t_info_pub.publish(camera_info_msg0)
                 self.populate_camera_static_transforms(t_data)
+
+    def WorldObjectCB(self, results):
+        """Callback for when the Spot Wrapper gets new world_object data.
+
+        Args:
+            results: FutureWrapper object of AsyncPeriodicQuery callback
+        """
+        del results
+        proto = self.spot_wrapper.world_object
+        self.publish_world_object(proto)
 
     def handle_claim(self, req):
         """ROS service handler for the claim service"""
@@ -600,6 +612,64 @@ class SpotROS():
             self.camera_static_transforms.append(static_tf)
             self.camera_static_transform_broadcaster.sendTransform(self.camera_static_transforms)
 
+    def publish_world_object(self, proto):
+        bbox = BoundingBoxArray()
+        bbox.header.frame_id = "vision"
+        bbox.header.stamp = rospy.Time.now()
+        bbox_detection = BoundingBoxArray()
+        bbox_detection.header.frame_id = "vision"
+        bbox_detection.header.stamp = rospy.Time.now()
+        for world_object in proto.world_objects:
+            rospy.logdebug(f"world_object {world_object}")
+            if world_object.name == "world_obj_tracked_entity":
+                timestamp = rospy.Time(
+                    secs=world_object.acquisition_time.seconds,
+                    nsecs=world_object.acquisition_time.nanos,
+                )
+                for key in world_object.transforms_snapshot.child_to_parent_edge_map:
+                    frame = world_object.transforms_snapshot.child_to_parent_edge_map[
+                        key
+                    ]
+                    if key.startswith("blob"):
+                        if not key.endswith("detection"):
+                            box = BoundingBox()
+                            box.header.frame_id = frame.parent_frame_name
+                            box.header.stamp = timestamp
+                            box.label = (
+                                abs(hash(key)) % 2**32
+                            )  # Round hashed value to the range of uint32
+                            box.pose.position.x = frame.parent_tform_child.position.x
+                            box.pose.position.y = frame.parent_tform_child.position.y
+                            box.pose.position.z = frame.parent_tform_child.position.z - 0.8
+                            box.pose.orientation.w = frame.parent_tform_child.rotation.w
+                            box.pose.orientation.x = frame.parent_tform_child.rotation.x
+                            box.pose.orientation.y = frame.parent_tform_child.rotation.y
+                            box.pose.orientation.z = frame.parent_tform_child.rotation.z
+                            box.dimensions.x = 1.0
+                            box.dimensions.y = 1.0
+                            box.dimensions.z = 0.1
+                            bbox.boxes.append(box)
+                        else:
+                            box = BoundingBox()
+                            box.header.frame_id = frame.parent_frame_name
+                            box.header.stamp = timestamp
+                            box.label = (
+                                abs(hash(key)) % 2**32
+                            )  # Round hashed value to the range of uint32
+                            box.pose.position.x = frame.parent_tform_child.position.x
+                            box.pose.position.y = frame.parent_tform_child.position.y
+                            box.pose.position.z = frame.parent_tform_child.position.z - 0.8
+                            box.pose.orientation.w = frame.parent_tform_child.rotation.w
+                            box.pose.orientation.x = frame.parent_tform_child.rotation.x
+                            box.pose.orientation.y = frame.parent_tform_child.rotation.y
+                            box.pose.orientation.z = frame.parent_tform_child.rotation.z
+                            box.dimensions.x = 1.0
+                            box.dimensions.y = 1.0
+                            box.dimensions.z = 0.1
+                            bbox_detection.boxes.append(box)
+        self.world_object_bbox_pub.publish(bbox)
+        self.world_object_detection_bbox_pub.publish(bbox_detection)
+
     def shutdown(self):
         rospy.loginfo("Shutting down ROS driver for Spot")
         if self.spot_wrapper.check_has_arm():
@@ -685,6 +755,15 @@ class SpotROS():
                 for t in ['hand_color', 'hand_depth', 'hand_image', 'hand_depth_in_hand_color_frame', 'hand_color_in_hand_depth_frame']:
                     self.gripper_image_pubs.append(rospy.Publisher('camera/'+t+'/image', Image, queue_size=10))
                     self.gripper_camera_info_pubs.append(rospy.Publisher('camera/'+t+'/camera_info', CameraInfo, queue_size=10))
+
+            # World Object #
+            # world_object_bbox_pub publishes the pose and bounding box of recognized_objects which are obtained from bosdyn's world_object api
+            self.world_object_bbox_pub = rospy.Publisher(
+                "tracked_world_objects", BoundingBoxArray, queue_size=10
+            )
+            self.world_object_detection_bbox_pub = rospy.Publisher(
+                "tracked_world_objects_detection", BoundingBoxArray, queue_size=10
+            )
 
             # Status Publishers #
             self.joint_state_pub = rospy.Publisher('joint_states', JointState, queue_size=10)
