@@ -531,7 +531,7 @@ class SpotROS():
     def cmdVelCallback(self, data):
         """Callback for cmd_vel command"""
         self.velocity_cmd_received_timestamp = rospy.Time.now()
-        self.spot_wrapper.velocity_cmd(data.linear.x, data.linear.y, data.angular.z)
+        self.spot_wrapper.velocity_cmd(data.linear.x, data.linear.y, data.angular.z, cmd_duration=self.velocity_cmd_duration)
         self.velocity_cmd_publish_zero = False
 
     def bodyPoseCallback(self, data):
@@ -694,6 +694,7 @@ class SpotROS():
         self.velocity_cmd_received_timeout = rospy.get_param('~velocity_cmd_received_timeout', 1.0)
         self.velocity_cmd_publish_zero = False
         self.velocity_cmd_received_timestamp = rospy.Time.now()
+        self.velocity_cmd_duration = rospy.get_param('~velocity_cmd_duration', 0.125)
 
         self.camera_static_transform_broadcaster = tf2_ros.StaticTransformBroadcaster()
         # Static transform broadcaster is super simple and just a latched publisher. Every time we add a new static
