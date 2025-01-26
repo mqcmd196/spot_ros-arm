@@ -36,6 +36,20 @@ import bosdyn.api.robot_state_pb2
 from bosdyn.api import basic_command_pb2
 from google.protobuf.timestamp_pb2 import Timestamp
 
+try:
+    from bosdyn.client.exceptions import ProtobufDecodeError
+
+    def handle_protobuf_decode_error(exception):
+        if isinstance(exception, ProtobufDecodeError):
+            rospy.logwarn("Caught ProtobufDecodeError. Maybe network traffic is busy")
+            rospy.logwarn(exception)
+            pass
+
+except ImportError:
+    def handle_protobuf_decode_error(exception):
+        pass
+
+
 """
 Image sources:
 	back_depth
@@ -92,6 +106,9 @@ class AsyncRobotState(AsyncPeriodicQuery):
             callback_future.add_done_callback(self._callback)
             return callback_future
 
+    def _handle_error(self, exception):
+        handle_protobuf_decode_error(exception)
+
 class AsyncWorldObject(AsyncPeriodicQuery):
     """Class to get world object at regular intervals.  get_world_object_async query sent to the robot at every tick.  Callback registered to defined callback function.
 
@@ -113,6 +130,9 @@ class AsyncWorldObject(AsyncPeriodicQuery):
             callback_future = self._client.list_world_objects_async()
             callback_future.add_done_callback(self._callback)
             return callback_future
+
+    def _handle_error(self, exception):
+        handle_protobuf_decode_error(exception)
 
 class AsyncMetrics(AsyncPeriodicQuery):
     """Class to get robot metrics at regular intervals.  get_robot_metrics_async query sent to the robot at every tick.  Callback registered to defined callback function.
@@ -136,6 +156,9 @@ class AsyncMetrics(AsyncPeriodicQuery):
             callback_future.add_done_callback(self._callback)
             return callback_future
 
+    def _handle_error(self, exception):
+        handle_protobuf_decode_error(exception)
+
 class AsyncLease(AsyncPeriodicQuery):
     """Class to get lease state at regular intervals.  list_leases_async query sent to the robot at every tick.  Callback registered to defined callback function.
 
@@ -157,6 +180,9 @@ class AsyncLease(AsyncPeriodicQuery):
             callback_future = self._client.list_leases_async()
             callback_future.add_done_callback(self._callback)
             return callback_future
+
+    def _handle_error(self, exception):
+        handle_protobuf_decode_error(exception)
 
 class AsyncImageService(AsyncPeriodicQuery):
     """Class to get images at regular intervals.  get_image_from_sources_async query sent to the robot at every tick.  Callback registered to defined callback function.
@@ -180,6 +206,9 @@ class AsyncImageService(AsyncPeriodicQuery):
             callback_future = self._client.get_image_async(self._image_requests)
             callback_future.add_done_callback(self._callback)
             return callback_future
+
+    def _handle_error(self, exception):
+        handle_protobuf_decode_error(exception)
 
 class AsyncIdle(AsyncPeriodicQuery):
     """Class to check if the robot is moving, and if not, command a stand with the set mobility parameters
@@ -271,6 +300,9 @@ class AsyncIdle(AsyncPeriodicQuery):
                     and self._spot_wrapper._last_velocity_command_time is not None
                     and self._spot_wrapper._last_docking_command is not None):
             self._spot_wrapper.stand(False)
+
+    def _handle_error(self, exception):
+        handle_protobuf_decode_error(exception)
 
 class SpotWrapper():
     """Generic wrapper class to encompass release 1.1.4 API features as well as maintaining leases automatically"""
