@@ -34,6 +34,7 @@ from . import graph_nav_util
 
 import bosdyn.api.robot_state_pb2
 from bosdyn.api import basic_command_pb2
+from google.protobuf.message import DecodeError
 from google.protobuf.timestamp_pb2 import Timestamp
 
 try:
@@ -962,7 +963,12 @@ class SpotWrapper():
                 "rb",
             ) as snapshot_file:
                 waypoint_snapshot = map_pb2.WaypointSnapshot()
-                waypoint_snapshot.ParseFromString(snapshot_file.read())
+                try:
+                    # Sometimes ParseFromString fails when resource is busy
+                    waypoint_snapshot.ParseFromString(snapshot_file.read())
+                except DecodeError as e:
+                    rospy.logwarn("Caught grpc DecodeError. Maybe the network traffic is busy")
+                    pass
                 self._current_waypoint_snapshots[
                     waypoint_snapshot.id
                 ] = waypoint_snapshot
