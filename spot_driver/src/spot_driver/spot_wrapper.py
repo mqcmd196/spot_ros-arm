@@ -968,6 +968,8 @@ class SpotWrapper():
                 try:
                     # Sometimes ParseFromString fails when resource is busy
                     waypoint_snapshot.ParseFromString(snapshot_file.read())
+                    time.sleep(.1) # Sleep for a millisecond to allow for parsing snapshot.
+                    # The pb2 failed to parse the string when the resource is busy.
                 except DecodeError as e:
                     rospy.logwarn("Caught grpc DecodeError. Maybe the network traffic is busy")
                     pass
@@ -984,6 +986,8 @@ class SpotWrapper():
             ) as snapshot_file:
                 edge_snapshot = map_pb2.EdgeSnapshot()
                 edge_snapshot.ParseFromString(snapshot_file.read())
+                time.sleep(.1) # Sleep for a millisecond to allow for parsing snapshot.
+                # The pb2 failed to parse the string when the resource is busy.
                 self._current_edge_snapshots[edge_snapshot.id] = edge_snapshot
         # Upload the graph to the robot.
         print("Uploading the graph and snapshots to the robot...")
