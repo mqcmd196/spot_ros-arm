@@ -55,6 +55,12 @@ class ArmWrapper:
             self.handle_unstow_arm,
         )
 
+        self.carry_arm_srv = rospy.Service(
+            "carry",
+            Trigger,
+            self.handle_carry_arm,
+        )
+
         self.open_gripper_srv = rospy.Service(
             "gripper_open",
             Trigger,
@@ -134,6 +140,9 @@ class ArmWrapper:
 
     def handle_unstow_arm(self, _):
         return self._send_arm_cmd(cmd=RobotCommandBuilder.arm_ready_command())
+
+    def handle_carry_arm(self, _):
+        return self._send_arm_cmd(cmd=RobotCommandBuilder.arm_carry_command())
 
     def handle_gripper_open(self, _):
         return self._send_arm_cmd(RobotCommandBuilder.claw_gripper_open_command())
