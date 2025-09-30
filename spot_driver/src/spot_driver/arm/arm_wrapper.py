@@ -8,10 +8,11 @@ import actionlib
 
 from std_srvs.srv import Trigger, TriggerResponse
 from spot_msgs.msg import OpenDoorAction, PickObjectInImageAction, PickObjectInImageFeedback, PickObjectInImageResult, PickObjectInImageGoal, WalkToObjectInImageAction, WalkToObjectInImageFeedback, WalkToObjectInImageResult, WalkToObjectInImageGoal
-from spot_msgs.srv import OpenDoor, SetArmImpedanceParams, SetArmImpedanceParamsResponse
+from spot_msgs.srv import OpenDoor, SetArmImpedanceParams, SetArmImpedanceParamsResponse, ConstrainedManipulation, ConstrainedManipulationRequest, ConstrainedManipulationResponse
 from vision_msgs.msg import Detection2D
 from spot_driver.arm.arm_utilities.object_grabber import object_grabber_main, add_grasp_constraint
 from spot_driver.arm.arm_utilities.door_opener import open_door_main
+from spot_driver.arm.arm_utilities.constrained_manipulation_helper import *
 from control_msgs.msg import FollowJointTrajectoryAction
 from actionlib import SimpleActionServer
 
@@ -25,6 +26,7 @@ import re
 import math
 import time
 from bosdyn.util import seconds_to_timestamp, seconds_to_duration
+from functools import partial
 
 
 class ArmWrapper:
@@ -71,6 +73,54 @@ class ArmWrapper:
             "gripper_close",
             Trigger,
             self.handle_gripper_close,
+        )
+
+        self.crank_task_srv = rospy.Service(
+            "crank",
+            ConstrainedManipulation,
+            partial(self.handle_constrained_manipulation, "crank"),
+        )
+
+        self.lever_task_srv = rospy.Service(
+            "lever",
+            ConstrainedManipulation,
+            partial(self.handle_constrained_manipulation, "lever"),
+        )
+
+        self.left_handed_ballvalve_task_srv = rospy.Service(
+            "left_handed_ballvalve",
+            ConstrainedManipulation,
+            partial(self.handle_constrained_manipulation, "left_handed_ballvalve"),
+        )
+
+        self.right_handed_ballvalve_task_srv = rospy.Service(
+            "right_handed_ballvalve",
+            ConstrainedManipulation,
+            partial(self.handle_constrained_manipulation, "right_handed_ballvalve"),
+        )
+
+        self.cabinet_task_srv = rospy.Service(
+            "cabinet",
+            ConstrainedManipulation,
+            partial(self.handle_constrained_manipulation, "cabinet"),
+        )
+
+        self.wheel_task_srv = rospy.Service(
+            "wheel",
+            ConstrainedManipulation,
+            partial(self.handle_constrained_manipulation, "whell"),
+        )
+
+        self.drawer_task_srv = rospy.Service(
+            "drawer",
+            ConstrainedManipulation,
+            partial(self.handle_constrained_manipulation, "drawer"),
+        )
+
+        self.knob_task_srv = rospy.Service(
+            "knob",
+            ConstrainedManipulation,
+            partial(self.handle_constrained_manipulation, "knob"),
         )
 
         self.arm_impedance_parameters = rospy.Service(
@@ -149,6 +199,71 @@ class ArmWrapper:
 
     def handle_gripper_close(self, _):
         return self._send_arm_cmd(RobotCommandBuilder.claw_gripper_close_command())
+
+    def handle_constrained_manipulation(self, task_type: str, request: ConstrainedManipulationRequest):
+        # spot-sdk/python/examples/arm_constrained_manipulation/run_constrained_manipulation.py
+        rospy.loginfo(f"Start doing constrained manipulation: {task_type}")
+        if (task_type == 'crank'):
+            command = construct_crank_task(request.task_velocity, force_limit=request.force_limit,
+                                           target_angle=request.target,
+                                           position_control=True)
+        elif (task_type == 'lever'):
+            command = construct_lever_task(request.task_velocity, force_limit=request.force_limit,
+                                           torque_limit=request.torque_limit,
+                                           target_angle=request.target,
+                                           position_control=True)
+        elif (task_type == 'left_handed_ballvalve'):
+            command = construct_left_handed_ballvalve_task(
+                request.task_velocity, force_limit=request.force_limit, torque_limit=request.torque_limit,
+                target_angle=request.target, position_control=True)
+        elif (task_type == 'right_handed_ballvalve'):
+            command = construct_right_handed_ballvalve_task(
+                request.task_velocity, force_limit=request.force_limit, torque_limit=request.torque_limit,
+                target_angle=request.target, position_control=True)
+        elif (task_type == 'cabinet'):
+            command = construct_cabinet_task(request.task_velocity, force_limit=request.force_limit,
+                                             target_angle=request.target,
+                                             position_control=True)
+        elif (task_type == 'wheel'):
+            command = construct_wheel_task(request.task_velocity, force_limit=request.force_limit,
+                                           target_angle=request.target,
+                                           position_control=True)
+
+        elif (task_type == 'drawer'):
+            command = construct_drawer_task(request.task_velocity, force_limit=request.force_limit,
+                                            target_linear_position=request.target,
+                                            position_control=True)
+
+        elif (task_type == 'knob'):
+            command = construct_knob_task(request.task_velocity, torque_limit=request.torque_limit,
+                                          target_angle=request.target,
+                                          position_control=True)
+        else:
+            rospy.logerr("Unspecified task type. Exit.")
+            return
+        command_client = self._robot.ensure_client(
+            RobotCommandClient.default_service_name
+        )
+        robot_state_client = self._robot.ensure_client(
+            RobotStateClient.default_service_name
+        )
+        response = ConstrainedManipulationResponse()
+        if not robot_state_client.get_robot_state().manipulator_state.is_gripper_holding_item:
+            response.success = False
+            response.message = "Gripper is empty. If incorrect, use the grasp_override_command."
+            return response
+        rospy.loginfo("About to start")
+        # For position moves, we don't want a small end-time to cause a pre-mature stop,
+        # so set the end-time to a large value.
+        # In a position move even with a large end-time, the robot would stop
+        # after achieving the desired position and we are robust to loss in communication.
+        task_duration = 100000.0
+        command.full_body_command.constrained_manipulation_request.end_time.CopyFrom(
+            self._robot.time_sync.robot_timestamp_from_local_secs(time.time() + task_duration))
+        command_client.robot_command_async(command)
+        time.sleep(2 * task_duration)
+        response.success = True
+        return response
 
     def handle_open_door(self, _):
         rospy.loginfo("Got a open door request")
