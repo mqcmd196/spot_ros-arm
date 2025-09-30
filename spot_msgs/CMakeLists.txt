@@ -48,6 +48,7 @@ add_service_files(
   Dock.srv
   GetDockState.srv
   SetArmImpedanceParams.srv
+  ConstrainedManipulation.srv
 )
 
 add_action_files(
