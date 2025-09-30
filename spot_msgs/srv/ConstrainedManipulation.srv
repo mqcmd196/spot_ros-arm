@@ -1,0 +1,8 @@
+float64 task_velocity # Desired task velocity
+float64 force_limit # Max force to be applied along task dimensions
+float64 torque_limit # Max force to be applied along task dimensions
+float64 target # Target displacement in task space. Set angle for crank, lever, left_handed_ballvalve, right_handed_ballvalve, cabinet, wheel, knob tasks. Set linear for drawer task.
+float64 velocity_limit # Velocity limit for position moves
+---
+bool success
+string message
