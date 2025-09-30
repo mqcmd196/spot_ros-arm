@@ -260,8 +260,8 @@ class ArmWrapper:
         task_duration = 100000.0
         command.full_body_command.constrained_manipulation_request.end_time.CopyFrom(
             self._robot.time_sync.robot_timestamp_from_local_secs(time.time() + task_duration))
-        command_client.robot_command_async(command)
-        time.sleep(2 * task_duration)
+        command_client.robot_command(command)
+        time.sleep(3.0)
         response.success = True
         return response
 
