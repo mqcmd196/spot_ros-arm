@@ -6,6 +6,14 @@ uint8 FORCE_HORIZONTAL_GRASP = 2
 uint8 FORCE_45_ANGLE_GRASP   = 3
 uint8 FORCE_SQUEEZE_GRASP    = 4
 duration max_duration
+float64 grasp_palm_to_fingertip # We can specify where in the gripper we want to grasp. About halfway is generally good for small objects like this. For a bigger object like a shoe, 0 is better (use the entire gripper)
+
+# Axis on the gripper that you want to align. For example, to align the front of the gripper to be straight down, you'd use:
+# axis_on_gripper_ewrt_gripper = Vec3(1, 0, 0)
+# axis_to_align_with_ewrt_frame = Vec3(0, 0, -1) (in the "vision" frame)
+# ROS: This overwrites grasp_constraint option
+geometry_msgs/Point axis_on_gripper_ewrt_gripper
+geometry_msgs/Point axis_to_align_with_ewrt_vo
 ---
 # did robot picked the object?
 bool success
