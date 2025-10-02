@@ -19,7 +19,7 @@ from actionlib import SimpleActionServer
 from bosdyn.client.manipulation_api_client import ManipulationApiClient
 from bosdyn.api import manipulation_api_pb2
 from bosdyn.client.frame_helpers import (BODY_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME,
-                                         GROUND_PLANE_FRAME_NAME, HAND_FRAME_NAME, ODOM_FRAME_NAME, get_a_tform_b)
+                                         GROUND_PLANE_FRAME_NAME, HAND_FRAME_NAME, ODOM_FRAME_NAME, VISION_FRAME_NAME, get_a_tform_b)
 from bosdyn.client.math_helpers import Quat, SE3Pose
 from bosdyn.client.robot_state import RobotStateClient
 import re
@@ -429,8 +429,36 @@ class ArmWrapper:
                 transforms_snapshot_for_camera=image.shot.transforms_snapshot,
                 frame_name_image_sensor=image.shot.frame_name_image_sensor,
                 camera_model=image.source.pinhole)
+            if goal.grasp_palm_to_fingertip:
+                rospy.loginfo(f"Set grasp_palm_to_fingertip: {goal.grasp_palm_to_fingertip}")
+                grasp.grasp_params.grasp_palm_to_fingertip = goal.grasp_palm_to_fingertip
 
-            add_grasp_constraint(options, grasp, self._spot_wrapper._robot_state_client)
+            if goal.grasp_constraint:
+                rospy.loginfo(f"Set grasp_constraint: {options}")
+                add_grasp_constraint(options, grasp, self._spot_wrapper._robot_state_client)
+
+            if goal.axis_on_gripper_ewrt_gripper or goal.axis_to_align_with_ewrt_vo:
+                if goal.grasp_constraint:
+                    rospy.logwarn("grasp_constraint would be overwritten")
+                grasp.grasp_params.grasp_params_frame_name = VISION_FRAME_NAME
+                if goal.axis_on_gripper_ewrt_gripper:
+                    rospy.loginfo(f"axis_on_gripper_ewrt_gripper: {goal.axis_on_gripper_ewrt_gripper}")
+                    axis_on_gripper_ewrt_gripper = geometry_pb2.Vec3(x=goal.axis_on_gripper_ewrt_gripper.x,
+                                                                     y=goal.axis_on_gripper_ewrt_gripper.y,
+                                                                     z=goal.axis_on_gripper_ewrt_gripper.z)
+                if goal.axis_to_align_with_ewrt_vo:
+                    rospy.loginfo(f"axis_to_align_with_ewrt_vo: {goal.axis_to_align_with_ewrt_vo}")
+                    axis_to_align_with_ewrt_vo = geometry_pb2.Vec3(x=goal.axis_to_align_with_ewrt_vo.x,
+                                                                   y=goal.axis_to_align_with_ewrt_vo.y,
+                                                                   z=goal.axis_to_align_with_ewrt_vo.z)
+                constraint = grasp.grasp_params.allowable_orientation.add()
+                constraint.vector_alignment_with_tolerance.axis_on_gripper_ewrt_gripper.CopyFrom(
+                    axis_on_gripper_ewrt_gripper
+                )
+                constraint.vector_alignment_with_tolerance.axis_to_align_with_ewrt_frame.CopyFrom(
+                    axis_to_align_with_ewrt_vo
+                )
+                constraint.vector_alignment_with_tolerance.threshold_radians = 0.17
 
             # Ask the robot to pick up the object
             request = manipulation_api_pb2.ManipulationApiRequest(
