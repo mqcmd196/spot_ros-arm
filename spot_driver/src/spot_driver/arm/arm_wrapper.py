@@ -28,6 +28,9 @@ import time
 from bosdyn.util import seconds_to_timestamp, seconds_to_duration
 from functools import partial
 
+def _is_normalized(p, eps=1e-3):
+    norm = math.sqrt(p.x**2 + p.y**2 + p.z**2)
+    return abs(norm - 1.0) < eps
 
 class ArmWrapper:
     def __init__(self, robot, wrapper, logger):
@@ -437,20 +440,24 @@ class ArmWrapper:
                 rospy.loginfo(f"Set grasp_constraint: {options}")
                 add_grasp_constraint(options, grasp, self._spot_wrapper._robot_state_client)
 
-            if goal.axis_on_gripper_ewrt_gripper or goal.axis_to_align_with_ewrt_vo:
+            if _is_normalized(goal.axis_on_gripper_ewrt_gripper) or _is_normalized(goal.axis_to_align_with_ewrt_vo):
                 if goal.grasp_constraint:
                     rospy.logwarn("grasp_constraint would be overwritten")
                 grasp.grasp_params.grasp_params_frame_name = VISION_FRAME_NAME
-                if goal.axis_on_gripper_ewrt_gripper:
+                if _is_normalized(goal.axis_on_gripper_ewrt_gripper):
                     rospy.loginfo(f"axis_on_gripper_ewrt_gripper: {goal.axis_on_gripper_ewrt_gripper}")
                     axis_on_gripper_ewrt_gripper = geometry_pb2.Vec3(x=goal.axis_on_gripper_ewrt_gripper.x,
                                                                      y=goal.axis_on_gripper_ewrt_gripper.y,
                                                                      z=goal.axis_on_gripper_ewrt_gripper.z)
-                if goal.axis_to_align_with_ewrt_vo:
+                else:
+                    rospy.loginfo("axis_on_gripper_ewrt_gripper is not normalized. Skipping")
+                if _is_normalized(goal.axis_to_align_with_ewrt_vo):
                     rospy.loginfo(f"axis_to_align_with_ewrt_vo: {goal.axis_to_align_with_ewrt_vo}")
                     axis_to_align_with_ewrt_vo = geometry_pb2.Vec3(x=goal.axis_to_align_with_ewrt_vo.x,
                                                                    y=goal.axis_to_align_with_ewrt_vo.y,
                                                                    z=goal.axis_to_align_with_ewrt_vo.z)
+                else:
+                    rospy.loginfo("axis_to_align_with_ewrt_vo is not normalized. Skipping")
                 constraint = grasp.grasp_params.allowable_orientation.add()
                 constraint.vector_alignment_with_tolerance.axis_on_gripper_ewrt_gripper.CopyFrom(
                     axis_on_gripper_ewrt_gripper
@@ -459,6 +466,8 @@ class ArmWrapper:
                     axis_to_align_with_ewrt_vo
                 )
                 constraint.vector_alignment_with_tolerance.threshold_radians = 0.17
+            else:
+                rospy.loginfo("Skipping setting axis_on_gripper_ewrt_gripper and axis_to_align_with_ewrt_vo because of not normalized")
 
             # Ask the robot to pick up the object
             request = manipulation_api_pb2.ManipulationApiRequest(
