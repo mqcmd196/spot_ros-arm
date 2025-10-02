@@ -111,7 +111,7 @@ class ArmWrapper:
         self.wheel_task_srv = rospy.Service(
             "wheel",
             ConstrainedManipulation,
-            partial(self.handle_constrained_manipulation, "whell"),
+            partial(self.handle_constrained_manipulation, "wheel"),
         )
 
         self.drawer_task_srv = rospy.Service(
