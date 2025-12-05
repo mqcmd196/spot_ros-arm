@@ -786,11 +786,8 @@ class SpotWrapper():
             self._last_trajectory_command = response[2]
         return response[0], response[1]
 
-    def list_graph(self, upload_path):
-        """List waypoint ids of garph_nav
-        Args:
-          upload_path : Path to the root directory of the map.
-        """
+    def list_graph(self):
+        """List waypoint ids of garph_nav"""
         ids, eds = self._list_graph_waypoint_and_edge_ids()
         # skip waypoint_ for v2.2.1, skip waypiont for < v2.2
         return [v for k, v in sorted(ids.items(), key=lambda id : int(id[0].replace('waypoint_','')))]
@@ -892,7 +889,7 @@ class SpotWrapper():
             fiducial_init=graph_nav_pb2.SetLocalizationRequest.FIDUCIAL_INIT_NO_FIDUCIAL,
             ko_tform_body=current_odom_tform_body)
 
-    def _list_graph_waypoint_and_edge_ids(self, *args):
+    def _list_graph_waypoint_and_edge_ids(self):
         """List the waypoint ids and edge ids of the graph currently on the robot."""
 
         # Download current graph
