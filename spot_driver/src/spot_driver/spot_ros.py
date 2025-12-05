@@ -33,6 +33,7 @@ from spot_msgs.msg import MobilityParams
 from spot_msgs.msg import NavigateToAction, NavigateToResult, NavigateToFeedback
 from spot_msgs.msg import TrajectoryAction, TrajectoryResult, TrajectoryFeedback
 from spot_msgs.srv import ListGraph, ListGraphResponse
+from spot_msgs.srv import UploadGraph, UploadGraphResponse
 from spot_msgs.srv import SetLocomotion, SetLocomotionResponse
 from spot_msgs.srv import ClearBehaviorFault, ClearBehaviorFaultResponse
 from spot_msgs.srv import SetVelocity, SetVelocityResponse
@@ -549,10 +550,15 @@ class SpotROS():
         mobility_params.body_control.CopyFrom(body_control)
         self.spot_wrapper.set_mobility_params(mobility_params)
 
-    def handle_list_graph(self):
+    def handle_list_graph(self, req):
         """ROS service handler for listing graph_nav waypoint_ids"""
         resp = self.spot_wrapper.list_graph()
         return ListGraphResponse(resp)
+
+    def handle_upload_graph(self, req):
+        """ROS service handler for uploading graph_nav file"""
+        resp = self.spot_wrapper.upload_graph(req.upload_filepath)
+        return UploadGraphResponse(resp)
 
     def handle_navigate_to_feedback(self):
         """Thread function to send navigate_to feedback"""
@@ -810,6 +816,7 @@ class SpotROS():
             rospy.Service("clear_behavior_fault", ClearBehaviorFault, self.handle_clear_behavior_fault)
 
             rospy.Service("list_graph", ListGraph, self.handle_list_graph)
+            rospy.Service("upload_graph", UploadGraph, self.handle_upload_graph)
 
             # Docking
             rospy.Service("dock", Dock, self.handle_dock)
