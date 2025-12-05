@@ -792,6 +792,11 @@ class SpotWrapper():
         # skip waypoint_ for v2.2.1, skip waypiont for < v2.2
         return [v for k, v in sorted(ids.items(), key=lambda id : int(id[0].replace('waypoint_','')))]
 
+    def upload_graph(self, upload_filepath):
+        """Upload graphnav file"""
+        self._upload_graph_and_snapshots(upload_filepath)
+        return True
+
     def battery_change_pose(self, dir_hint=1):
         """Robot sit down and roll on to it its side for easier battery access"""
         response = self._robot_command(RobotCommandBuilder.battery_change_pose_command(dir_hint))
