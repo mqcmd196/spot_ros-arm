@@ -789,8 +789,8 @@ class SpotWrapper():
     def list_graph(self):
         """List waypoint ids of garph_nav"""
         ids, eds = self._list_graph_waypoint_and_edge_ids()
-        # skip waypoint_ for v2.2.1, skip waypiont for < v2.2
-        return [v for k, v in sorted(ids.items(), key=lambda id : int(id[0].replace('waypoint_','')))]
+        sorted_ids = [v for _, v in sorted(ids.items(), key=lambda item: item[0])]
+        return [i for i in sorted_ids if i is not None]
 
     def upload_graph(self, upload_filepath):
         """Upload graphnav file"""
