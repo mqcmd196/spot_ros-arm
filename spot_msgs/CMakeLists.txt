@@ -40,6 +40,7 @@ add_service_files(
   FILES
   ClearBehaviorFault.srv
   ListGraph.srv
+  UploadGraph.srv
   OpenDoor.srv
   SetLocomotion.srv
   SetVelocity.srv
