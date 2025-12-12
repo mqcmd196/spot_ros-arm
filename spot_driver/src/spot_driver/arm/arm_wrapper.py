@@ -14,13 +14,19 @@ from spot_driver.arm.arm_utilities.object_grabber import object_grabber_main, ad
 from spot_driver.arm.arm_utilities.door_opener import open_door_main
 from spot_driver.arm.arm_utilities.constrained_manipulation_helper import *
 from control_msgs.msg import FollowJointTrajectoryAction
+from cartesian_control_msgs.msg import (
+    FollowCartesianTrajectoryAction,
+    FollowCartesianTrajectoryFeedback,
+    FollowCartesianTrajectoryResult,
+    CartesianTrajectoryPoint,
+)
 from actionlib import SimpleActionServer
 
 from bosdyn.client.manipulation_api_client import ManipulationApiClient
 from bosdyn.api import manipulation_api_pb2
 from bosdyn.client.frame_helpers import (BODY_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME,
                                          GROUND_PLANE_FRAME_NAME, HAND_FRAME_NAME, ODOM_FRAME_NAME, VISION_FRAME_NAME, get_a_tform_b)
-from bosdyn.client.math_helpers import Quat, SE3Pose
+from bosdyn.client.math_helpers import Quat, SE3Pose, SE3Velocity
 from bosdyn.client.robot_state import RobotStateClient
 import re
 import math
@@ -163,6 +169,12 @@ class ArmWrapper:
             WalkToObjectInImageAction,
             execute_cb=self.handle_action_object_in_image)
         self.walk_to_object_in_image_server.start()
+
+        self.cartesian_trajectory_server = SimpleActionServer(
+            "arm_controller/follow_cartesian_trajectory",
+            FollowCartesianTrajectoryAction,
+            execute_cb=self.handle_cartesian_trajectory)
+        self.cartesian_trajectory_server.start()
 
         self._init_bosdyn_clients()
         self._init_actionservers()
@@ -393,6 +405,148 @@ class ArmWrapper:
         block_until_arm_arrives(command_client, cmd_id, total_time + 3)  # 3[sec] is buffer
         return self.arm_joint_trajectory_server.set_succeeded()
 
+    def handle_cartesian_trajectory(self, goal):
+        """
+        Handle FollowCartesianTrajectoryAction goal.
+        Based on spot-sdk/python/examples/arm_trajectory/arm_long_cartesian_trajectory.py
+        """
+        # Frame name mapping from ROS to Spot SDK
+        frame_name_map = {
+            'odom': ODOM_FRAME_NAME,
+            'body': BODY_FRAME_NAME,
+            'grav_aligned_body': GRAV_ALIGNED_BODY_FRAME_NAME,
+            'vision': VISION_FRAME_NAME,
+            'flat_body': GRAV_ALIGNED_BODY_FRAME_NAME,
+        }
+
+        # Get root frame name from trajectory header
+        ros_frame_id = goal.trajectory.header.frame_id
+        if ros_frame_id in frame_name_map:
+            root_frame_name = frame_name_map[ros_frame_id]
+        else:
+            root_frame_name = ros_frame_id
+        rospy.loginfo(f"Using root frame: {root_frame_name}")
+
+        # Get robot state client and command client
+        robot_state_client = self._robot.ensure_client(RobotStateClient.default_service_name)
+        command_client = self._robot.ensure_client(RobotCommandClient.default_service_name)
+
+        # Get current robot state for frame transforms
+        robot_state = robot_state_client.get_robot_state()
+
+        # Setup task frame (identity transform - trajectory is defined directly in root frame)
+        root_tform_task = SE3Pose.from_identity()
+
+        # Setup tool frame (wrist to hand/tool)
+        try:
+            link_wr1_T_tool = get_a_tform_b(
+                robot_state.kinematic_state.transforms_snapshot,
+                'link_wr1',
+                HAND_FRAME_NAME)
+            wrist_tform_tool = link_wr1_T_tool
+        except Exception as e:
+            rospy.logwarn(f"Could not get wrist to tool transform: {e}. Using identity.")
+            wrist_tform_tool = SE3Pose.from_identity()
+
+        # Check if we have trajectory points
+        if len(goal.trajectory.points) == 0:
+            result = FollowCartesianTrajectoryResult()
+            result.error_code = FollowCartesianTrajectoryResult.INVALID_GOAL
+            result.error_string = "Empty trajectory"
+            return self.cartesian_trajectory_server.set_aborted(result)
+
+        # Convert ROS trajectory points to Spot SDK format
+        positions = []
+        velocities = []
+        times = []
+        max_linear_vel = 0.0
+        max_angular_vel = 0.0
+        max_linear_acc = 0.0
+        max_angular_acc = 0.0
+
+        for point in goal.trajectory.points:
+            # Convert pose
+            pose = SE3Pose(
+                x=point.pose.position.x,
+                y=point.pose.position.y,
+                z=point.pose.position.z,
+                rot=Quat(
+                    w=point.pose.orientation.w,
+                    x=point.pose.orientation.x,
+                    y=point.pose.orientation.y,
+                    z=point.pose.orientation.z
+                )
+            )
+            positions.append(pose.to_proto())
+
+            # Convert velocity (twist)
+            velocity = SE3Velocity(
+                lin_x=point.twist.linear.x,
+                lin_y=point.twist.linear.y,
+                lin_z=point.twist.linear.z,
+                ang_x=point.twist.angular.x,
+                ang_y=point.twist.angular.y,
+                ang_z=point.twist.angular.z
+            )
+            velocities.append(velocity.to_proto())
+
+            # Track max velocities
+            lin_vel = math.sqrt(point.twist.linear.x**2 + point.twist.linear.y**2 + point.twist.linear.z**2)
+            ang_vel = math.sqrt(point.twist.angular.x**2 + point.twist.angular.y**2 + point.twist.angular.z**2)
+            max_linear_vel = max(max_linear_vel, lin_vel)
+            max_angular_vel = max(max_angular_vel, ang_vel)
+
+            # Track max accelerations
+            lin_acc = math.sqrt(point.acceleration.linear.x**2 + point.acceleration.linear.y**2 + point.acceleration.linear.z**2)
+            ang_acc = math.sqrt(point.acceleration.angular.x**2 + point.acceleration.angular.y**2 + point.acceleration.angular.z**2)
+            max_linear_acc = max(max_linear_acc, lin_acc)
+            max_angular_acc = max(max_angular_acc, ang_acc)
+
+            # Convert time
+            times.append(point.time_from_start.to_sec())
+
+        # Add margin to limits (1.5x) and set defaults if zero
+        DEFAULT_MAX_VEL = 1.0  # m/s
+        DEFAULT_MAX_ANG_VEL = 1.0  # rad/s
+        DEFAULT_MAX_ACC = 5.0  # m/s^2
+        MARGIN = 1.5
+
+        max_linear_vel = max_linear_vel * MARGIN if max_linear_vel > 0 else DEFAULT_MAX_VEL
+        max_angular_vel = max_angular_vel * MARGIN if max_angular_vel > 0 else DEFAULT_MAX_ANG_VEL
+        max_acc = max(max_linear_acc, max_angular_acc) * MARGIN if max(max_linear_acc, max_angular_acc) > 0 else DEFAULT_MAX_ACC
+
+        # Set reference time
+        start_time = time.time()
+        ref_time = seconds_to_timestamp(start_time)
+
+        # Calculate total trajectory time
+        total_time = times[-1] if times else 0
+
+        rospy.loginfo(f"Sending cartesian trajectory with {len(positions)} points, "
+                      f"max_vel={max_linear_vel:.2f} m/s, max_ang_vel={max_angular_vel:.2f} rad/s, max_acc={max_acc:.2f}")
+
+        # Build and send the command
+        robot_cmd = RobotCommandBuilder.arm_cartesian_move_helper(
+            se3_poses=positions,
+            times=times,
+            se3_velocities=velocities,
+            root_frame_name=root_frame_name,
+            root_tform_task=root_tform_task.to_proto(),
+            wrist_tform_tool=wrist_tform_tool.to_proto(),
+            max_acc=max_acc,
+            max_linear_vel=max_linear_vel,
+            max_angular_vel=max_angular_vel,
+            ref_time=ref_time,
+        )
+
+        cmd_id = command_client.robot_command(robot_cmd)
+
+        # Wait for trajectory to complete
+        block_until_arm_arrives(command_client, cmd_id, total_time + 3.0)
+
+        result = FollowCartesianTrajectoryResult()
+        result.error_code = FollowCartesianTrajectoryResult.SUCCESSFUL
+        return self.cartesian_trajectory_server.set_succeeded(result)
 
     # mostry copied from spot_driver/src/spot_driver/arm/arm_utilities/object_grabber.py
     def handle_action_object_in_image(self, goal):
