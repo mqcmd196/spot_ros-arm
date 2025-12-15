@@ -21,6 +21,7 @@
   <exec_depend>teleop_twist_joy</exec_depend>
   <exec_depend>velodyne_pointcloud</exec_depend>
   <exec_depend>vision_msgs</exec_depend>
+  <exec_depend>cartesian_control_msgs</exec_depend>
 
   <export>
     <rosdoc config="rosdoc.yaml" />
