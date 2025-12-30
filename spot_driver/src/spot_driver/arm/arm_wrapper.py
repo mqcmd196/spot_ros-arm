@@ -8,7 +8,7 @@ import actionlib
 
 from std_srvs.srv import Trigger, TriggerResponse
 from spot_msgs.msg import OpenDoorAction, PickObjectInImageAction, PickObjectInImageFeedback, PickObjectInImageResult, PickObjectInImageGoal, WalkToObjectInImageAction, WalkToObjectInImageFeedback, WalkToObjectInImageResult, WalkToObjectInImageGoal
-from spot_msgs.srv import OpenDoor, SetArmImpedanceParams, SetArmImpedanceParamsResponse, ConstrainedManipulation, ConstrainedManipulationRequest, ConstrainedManipulationResponse
+from spot_msgs.srv import OpenDoor, SetArmImpedanceParams, SetArmImpedanceParamsResponse, ConstrainedManipulation, ConstrainedManipulationRequest, ConstrainedManipulationResponse, SetGripperAngle
 from vision_msgs.msg import Detection2D
 from spot_driver.arm.arm_utilities.object_grabber import object_grabber_main, add_grasp_constraint
 from spot_driver.arm.arm_utilities.door_opener import open_door_main
@@ -76,6 +76,12 @@ class ArmWrapper:
             "gripper_open",
             Trigger,
             self.handle_gripper_open,
+        )
+
+        self.open_gripper_srv = rospy.Service(
+            "gripper_close",
+            Trigger,
+            self.handle_gripper_close,
         )
 
         self.open_gripper_srv = rospy.Service(
@@ -214,6 +220,11 @@ class ArmWrapper:
 
     def handle_gripper_close(self, _):
         return self._send_arm_cmd(RobotCommandBuilder.claw_gripper_close_command())
+
+    def handle_gripper_angle_open(self, request: SetGripperAngle):
+        return self._send_arm_cmd(
+            RobotCommandBuilder.claw_gripper_open_fraction_command(request.gripper_angle / 90.0)
+        )
 
     def handle_constrained_manipulation(self, task_type: str, request: ConstrainedManipulationRequest):
         # spot-sdk/python/examples/arm_constrained_manipulation/run_constrained_manipulation.py
