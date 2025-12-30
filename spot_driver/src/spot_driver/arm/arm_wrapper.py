@@ -78,7 +78,7 @@ class ArmWrapper:
             self.handle_gripper_open,
         )
 
-        self.open_gripper_srv = rospy.Service(
+        self.close_gripper_srv = rospy.Service(
             "gripper_close",
             Trigger,
             self.handle_gripper_close,
