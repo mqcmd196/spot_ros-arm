@@ -1,12 +1,12 @@
 from google.protobuf import wrappers_pb2
-from bosdyn.api import arm_command_pb2, estop_pb2, geometry_pb2, robot_command_pb2, synchronized_command_pb2, image_pb2
+from bosdyn.api import arm_command_pb2, estop_pb2, geometry_pb2, robot_command_pb2, synchronized_command_pb2, image_pb2, robot_state_pb2
 from bosdyn.api.spot import robot_command_pb2 as spot_command_pb2
 from bosdyn.client.robot import RobotCommandClient
 from bosdyn.client.robot_command import RobotCommandBuilder, block_until_arm_arrives
 import rospy
 import actionlib
 
-from std_srvs.srv import Trigger, TriggerResponse
+from std_srvs.srv import Trigger, TriggerRequest, TriggerResponse
 from spot_msgs.msg import OpenDoorAction, PickObjectInImageAction, PickObjectInImageFeedback, PickObjectInImageResult, PickObjectInImageGoal, WalkToObjectInImageAction, WalkToObjectInImageFeedback, WalkToObjectInImageResult, WalkToObjectInImageGoal
 from spot_msgs.srv import OpenDoor, SetArmImpedanceParams, SetArmImpedanceParamsResponse, ConstrainedManipulation, ConstrainedManipulationRequest, ConstrainedManipulationResponse
 from vision_msgs.msg import Detection2D
@@ -37,6 +37,35 @@ from functools import partial
 def _is_normalized(p, eps=1e-3):
     norm = math.sqrt(p.x**2 + p.y**2 + p.z**2)
     return abs(norm - 1.0) < eps
+
+def wait_until_grasp_state_updates(grasp_override_command, robot_state_client):
+    updated = False
+    has_grasp_override = grasp_override_command.HasField("api_grasp_override")
+    has_carry_state_override = grasp_override_command.HasField("carry_state_override")
+
+    while not updated:
+        robot_state = robot_state_client.get_robot_state()
+
+        grasp_state_updated = (robot_state.manipulator_state.is_gripper_holding_item and
+                               (grasp_override_command.api_grasp_override.override_request
+                                == manipulation_api_pb2.ApiGraspOverride.OVERRIDE_HOLDING)) or (
+                                    not robot_state.manipulator_state.is_gripper_holding_item and
+                                    grasp_override_command.api_grasp_override.override_request
+                                    == manipulation_api_pb2.ApiGraspOverride.OVERRIDE_NOT_HOLDING)
+        carry_state_updated = has_carry_state_override and (
+            robot_state.manipulator_state.carry_state
+            == grasp_override_command.carry_state_override.override_request)
+        updated = (not has_grasp_override or
+                   grasp_state_updated) and (not has_carry_state_override or carry_state_updated)
+        time.sleep(0.1)
+
+def print_gripper_holding_and_carry_state(robot, robot_state):
+    """A helper function to print the current gripper holding and carry states."""
+    robot.logger.info(
+        f'Gripper holding something? {robot_state.manipulator_state.is_gripper_holding_item}')
+    robot.logger.info(
+        f'Arm carry state: {robot_state_pb2.ManipulatorState.CarryState.Name(robot_state.manipulator_state.carry_state)}'
+    )
 
 class ArmWrapper:
     def __init__(self, robot, wrapper, logger):
@@ -78,10 +107,24 @@ class ArmWrapper:
             self.handle_gripper_open,
         )
 
-        self.open_gripper_srv = rospy.Service(
+        self.close_gripper_srv = rospy.Service(
             "gripper_close",
             Trigger,
             self.handle_gripper_close,
+        )
+
+        self.grasp_holding_override = rospy.Service(
+            "grasp_holding_override",
+            Trigger,
+            partial(self.handle_gripper_override,
+                    manipulation_api_pb2.ApiGraspOverride.OVERRIDE_HOLDING)
+        )
+
+        self.grasp_not_holding_override = rospy.Service(
+            "grasp_not_holding_override",
+            Trigger,
+            partial(self.handle_gripper_override,
+                    manipulation_api_pb2.ApiGraspOverride.OVERRIDE_NOT_HOLDING)
         )
 
         self.crank_task_srv = rospy.Service(
@@ -214,6 +257,34 @@ class ArmWrapper:
 
     def handle_gripper_close(self, _):
         return self._send_arm_cmd(RobotCommandBuilder.claw_gripper_close_command())
+
+    def handle_gripper_override(self,
+                                api_grasp_override: manipulation_api_pb2.ApiGraspOverride,
+                                request: TriggerRequest):
+        grasp_override = manipulation_api_pb2.ApiGraspOverride(
+            override_request=api_grasp_override
+        )
+        override_request = manipulation_api_pb2.ApiGraspOverrideRequest(
+            api_grasp_override=grasp_override
+        )
+        robot_state_client = self._robot.ensure_client(
+            RobotStateClient.default_service_name
+        )
+        power_state = robot_state_client.get_robot_state().power_state
+        if power_state.motor_power_state != power_state.STATE_ON:
+            rospy.logerr("Override gripper state failed. Please power on the robot at first")
+            return TriggerResponse(success=False, message="Please power on the robot at first")
+        rospy.loginfo("Override gripper state")
+        self._manip_client.grasp_override_command(override_request)
+        wait_until_grasp_state_updates(override_request, robot_state_client)
+        robot_state = robot_state_client.get_robot_state()
+        info = (
+            f"Gripper holding something? {robot_state.manipulator_state.is_gripper_holding_item}"
+            + ". "
+            + f"Arm carry state: {robot_state_pb2.ManipulatorState.CarryState.Name(robot_state.manipulator_state.carry_state)}"
+        )
+        rospy.loginfo(info)
+        return TriggerResponse(success=True, message=info)
 
     def handle_constrained_manipulation(self, task_type: str, request: ConstrainedManipulationRequest):
         # spot-sdk/python/examples/arm_constrained_manipulation/run_constrained_manipulation.py
